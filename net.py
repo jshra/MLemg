@@ -87,13 +87,24 @@ class Regression_block(tf.keras.layers.Layer):
         x = self.mlp2(x)
         x = self.final(x)
         return x
+        
+class Transformer_block(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__()
+        self.mha = SelfAttention(256)
+        self.ff = FeedForward()
+    def call(self, x):
+        x = self.mha(x)
+        x = self.ff(x)
+        return x
 
 #%%
 input_layer = tf.keras.Input(shape=(200,5))
-mha_layer = SelfAttention(200)(input_layer)
-ff_layer = FeedForward()(mha_layer)
-output_layer = Regression_block()(ff_layer)
-#%%
+transformer1 = Transformer_block()(input_layer)
+transformer2 = Transformer_block()(transformer1)
+transformer3 = Transformer_block()(transformer2)
+transformer4 = Transformer_block()(transformer3)
+output_layer = Regression_block()(transformer4)
 
 model = tf.keras.Model(input_layer, output_layer)
 model.summary()
