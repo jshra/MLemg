@@ -3,12 +3,76 @@ from tensorflow.keras import layers
 import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.utils import Sequence
-#%%
-alldata = np.genfromtxt('t1.ASC', delimiter = ';', skip_header=8 , autostrip = True)
-data = alldata[:49800,1:7]
-test = alldata[49800:50000,1:7]
-print(data[:,:5].shape)
-print(data[:,-1].shape)
+import pywt
+
+#%%Stałe
+window_size = 200
+dwt_level = 4
+dec_len = 28 #sym14
+sampling_frequency = 100
+#%% Wczytanie danych
+alldata = np.genfromtxt('t1.ASC', delimiter = ';', skip_header=8 , autostrip = True)[:,1:-1]
+test = alldata[3000:3200,4:]
+testx = test[:,1:]
+testy = test[:,0]
+print(testx.shape)
+print(testy.shape)
+
+#%% Funkcje do preprocessingu
+
+
+def WaveletLength(window_size, dwt_level, dec_len): 
+    Wl = np.floor((window_size + dec_len - 1) / 2)
+    for i in range(0,dwt_level-1):
+        Wl = int((Wl + dec_len - 1) / 2)
+    return Wl
+
+def Standardize(data):
+    for i in range(0,data.shape[1]):
+        data[:,i] = (data[:,i] - np.mean(data[:,i]))/np.std(data[:,i])
+    return data
+
+def DWT(data, window_size, dwt_level):
+    wl = WaveletLength(window_size, dwt_level, dec_len)
+    output = np.zeros([wl,data.shape[1]*2])
+    i = 0
+    j = 0
+    while i < data.shape[1]:
+        output[:,j], output[:,j+1],_,_,_ = pywt.wavedec(data[:,i], pywt.Wavelet('sym14'), mode='sym', level=4)
+        j += 2
+        i += 1
+    return output
+
+
+def ExtractFeatures(data, window_size, sampling_frequency, dwt_level):
+    #dwt_level =0 -> nie ma transformaty falkowej i okna długosci takiej jak na poczatku
+    if dwt_level !=0:
+        wl = WaveletLength(window_size, dwt_level, dec_len)
+    else:
+        wl = window_size
+        
+    features = np.zeros([6,data.shape[1]])
+    for i in range(0, data.shape[1]):
+        features[0,i] = np.mean(np.abs(data[:,i])) #MAV
+        features[1,i] = np.mean(data[:,i]**2) #VAR
+        features[2,i] = np.sqrt(features[1,i]) #RMS
+        
+        power_spectrum = np.abs(np.fft.fft(data[:,i]))** 2
+        freqs = np.fft.fftfreq(wl, 1/sampling_frequency)
+        print(power_spectrum)
+        mask_negative = freqs >= 0
+        freqs = freqs[mask_negative]
+        power_spectrum = power_spectrum[mask_negative]
+        
+        features[3,i] = np.sum(freqs * power_spectrum)/np.sum(power_spectrum) #MNF
+        features[4,i] = np.mean(power_spectrum) #MNP
+        features[5,i] = np.sum(power_spectrum)/2
+    plt.plot(freqs,power_spectrum)
+    return features
+
+#TODO
+#funkcje do filtracji
+
 #%%
 class TSGenerator(Sequence):
     def __init__(self, data, window_size, batch_size, step_size=1):
@@ -25,6 +89,8 @@ class TSGenerator(Sequence):
         batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
         batch_data = np.array([self.data[i:i + self.window_size] for i in batch_indices])
         
+        
+        #dobrze przyporządkować kanały i wgl 
         input_data = np.array([sample[:, :5] for sample in batch_data])
         labels = np.array([np.mean(sample[:, -1]) for sample in batch_data])
         
@@ -87,7 +153,7 @@ class Regression_block(tf.keras.layers.Layer):
         x = self.mlp2(x)
         x = self.final(x)
         return x
-        
+    
 class Transformer_block(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
         super().__init__()
@@ -105,6 +171,7 @@ transformer2 = Transformer_block()(transformer1)
 transformer3 = Transformer_block()(transformer2)
 transformer4 = Transformer_block()(transformer3)
 output_layer = Regression_block()(transformer4)
+#%%
 
 model = tf.keras.Model(input_layer, output_layer)
 model.summary()
