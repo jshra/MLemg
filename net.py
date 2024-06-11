@@ -4,21 +4,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.utils import Sequence
 import pywt
+from scipy.signal import butter, freqz, filtfilt
 
-#%%Stałe
+
 window_size = 200
-dwt_level = 4
 dec_len = 28 #sym14
-sampling_frequency = 100
-#%% Wczytanie danych
-alldata = np.genfromtxt('t1.ASC', delimiter = ';', skip_header=8 , autostrip = True)[:,1:-1]
-test = alldata[3000:3200,4:]
-testx = test[:,1:]
-testy = test[:,0]
-print(testx.shape)
-print(testy.shape)
-
-#%% Funkcje do preprocessingu
+sampling_frequency = 2000
 
 
 def WaveletLength(window_size, dwt_level, dec_len): 
@@ -32,19 +23,19 @@ def Standardize(data):
         data[:,i] = (data[:,i] - np.mean(data[:,i]))/np.std(data[:,i])
     return data
 
-def DWT(data, window_size, dwt_level):
+def DWT(data, window_size, dwt_level=4):
     wl = WaveletLength(window_size, dwt_level, dec_len)
     output = np.zeros([wl,data.shape[1]*2])
     i = 0
     j = 0
     while i < data.shape[1]:
-        output[:,j], output[:,j+1],_,_,_ = pywt.wavedec(data[:,i], pywt.Wavelet('sym14'), mode='sym', level=4)
+        output[:,j], output[:,j+1],_,_,_ = pywt.wavedec(data[:,i], pywt.Wavelet('sym14'), mode='sym', level=dwt_level)
         j += 2
         i += 1
     return output
 
 
-def ExtractFeatures(data, window_size, sampling_frequency, dwt_level):
+def ExtractFeatures(data, window_size, sampling_frequency, dwt_level=4):
     #dwt_level =0 -> nie ma transformaty falkowej i okna długosci takiej jak na poczatku
     if dwt_level !=0:
         wl = WaveletLength(window_size, dwt_level, dec_len)
@@ -59,7 +50,6 @@ def ExtractFeatures(data, window_size, sampling_frequency, dwt_level):
         
         power_spectrum = np.abs(np.fft.fft(data[:,i]))** 2
         freqs = np.fft.fftfreq(wl, 1/sampling_frequency)
-        print(power_spectrum)
         mask_negative = freqs >= 0
         freqs = freqs[mask_negative]
         power_spectrum = power_spectrum[mask_negative]
@@ -67,16 +57,22 @@ def ExtractFeatures(data, window_size, sampling_frequency, dwt_level):
         features[3,i] = np.sum(freqs * power_spectrum)/np.sum(power_spectrum) #MNF
         features[4,i] = np.mean(power_spectrum) #MNP
         features[5,i] = np.sum(power_spectrum)/2
-    plt.plot(freqs,power_spectrum)
     return features
 
-#TODO
-#funkcje do filtracji
+#Filtering data 
 
-#%%
+# Creating  3-rd order butterworth filter inside generator 
+low = 10 
+high = 500  
+
+
+
 class TSGenerator(Sequence):
-    def __init__(self, data, window_size, batch_size, step_size=1):
+    def __init__(self, data, batch_size=32, window_size=200, sampling_frequency=2000, order=3, step_size=20):
         self.data = data
+        self.sampling_frequency = sampling_frequency
+        nyq = 0.5 * self.sampling_frequency
+        self.b, self.a =  butter(order, [low/nyq, high/nyq], btype='band')
         self.window_size = window_size
         self.batch_size = batch_size
         self.step_size = step_size
@@ -89,50 +85,27 @@ class TSGenerator(Sequence):
         batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
         batch_data = np.array([self.data[i:i + self.window_size] for i in batch_indices])
         
-        
-        #dobrze przyporządkować kanały i wgl 
-        input_data = np.array([sample[:, :5] for sample in batch_data])
-        labels = np.array([np.mean(sample[:, -1]) for sample in batch_data])
-        
-        return input_data, labels
+        #Channels 
+        input_data = np.array([sample[:, :10] for sample in batch_data])
+        labels = np.array([np.mean(sample[:, 10:32], axis=0) for sample in batch_data])
+        labels = Standardize(labels)
+
+        input_data = filtfilt(self.b, self.a, input_data, axis=0)
+        tab = np.zeros([len(batch_indices),37,20])
+        for d in range(0, tab.shape[0]):
+            tab[d] = DWT(input_data[d], self.window_size)
+
+        tab2 = np.zeros([len(batch_indices), 6, 20])
+        for q in range(0, tab2.shape[0]):
+            tab2[q]= ExtractFeatures(tab[q], self.window_size, self.sampling_frequency)
+        return tab2, labels
     
     def on_epoch_end(self):
         pass
     
-class SelfAttention(tf.keras.layers.Layer):
-    def __init__(self, units, **kwargs):
-        super().__init__()
-        self.mha = tf.keras.layers.MultiHeadAttention(key_dim=units, num_heads=4, **kwargs)
-        self.dropout = tf.keras.layers.Dropout(0.1)
-        self.layernorm = tf.keras.layers.LayerNormalization()
-        self.add = tf.keras.layers.Add()
-    def call(self, x):
-       attn_output = self.mha(query=x, value=x)
-       attn_output = self.dropout(attn_output)
-       x = self.add([x, attn_output])
-       x = self.layernorm(x)
-       return x
-   
-class FeedForward(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.layernorm = tf.keras.layers.LayerNormalization()
-        self.conv1 = tf.keras.layers.Conv1D(filters=3, kernel_size=1, activation = 'relu')
-        self.dropout = tf.keras.layers.Dropout(0.1)
-        self.conv2 = tf.keras.layers.Conv1D(filters=5, kernel_size=1)
-        self.add = tf.keras.layers.Add()
-    def call(self, x):
-        out = self.layernorm(x)
-        out = self.conv1(out)
-        out = self.dropout(out)
-        out = self.conv2(out)
-        
-        x = self.add([x, out])
-        return x
-    
 class MLP(tf.keras.layers.Layer):
     def __init__(self, units, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
         self.mlp = tf.keras.layers.Dense(units, activation='relu')
         self.dropout = tf.keras.layers.Dropout(0.1)
     def call(self, x):
@@ -142,7 +115,7 @@ class MLP(tf.keras.layers.Layer):
        
 class Regression_block(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
-        super().__init__()
+        super().__init__(**kwargs)
         self.mlp1 = MLP(128)
         self.mlp2 = MLP(128)
         self.final = tf.keras.layers.Dense(1, activation='relu')
@@ -154,37 +127,81 @@ class Regression_block(tf.keras.layers.Layer):
         x = self.final(x)
         return x
     
+class FeedForward(tf.keras.layers.Layer):
+    def __init__(self, input_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.layernorm = tf.keras.layers.LayerNormalization()
+        self.conv1 = tf.keras.layers.Conv1D(filters=5, kernel_size=1, activation='relu')
+        self.dropout = tf.keras.layers.Dropout(0.1)
+        self.conv2 = tf.keras.layers.Conv1D(filters=input_channels, kernel_size=1)
+        self.add = tf.keras.layers.Add()
+
+    def call(self, x):
+        out = self.layernorm(x)
+        out = self.conv1(out)
+        out = self.dropout(out)
+        out = self.conv2(out)
+        x = self.add([x, out])
+        return x
+
+class SelfAttention(tf.keras.layers.Layer):
+    def __init__(self, attn_units, **kwargs):
+        super().__init__(**kwargs)
+        self.mha = tf.keras.layers.MultiHeadAttention(key_dim=attn_units, num_heads=4)
+        self.dropout = tf.keras.layers.Dropout(0.1)
+        self.layernorm = tf.keras.layers.LayerNormalization()
+        self.add = tf.keras.layers.Add()
+
+    def call(self, x):
+        attn_output = self.mha(query=x, value=x, key=x)
+        attn_output = self.dropout(attn_output)
+        x = self.add([x, attn_output])
+        x = self.layernorm(x)
+        return x
+
 class Transformer_block(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
-        super().__init__()
-        self.mha = SelfAttention(256)
-        self.ff = FeedForward()
+    def __init__(self, attention_units, input_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.mha = SelfAttention(attention_units)
+        self.ff = FeedForward(input_channels)
+
     def call(self, x):
         x = self.mha(x)
         x = self.ff(x)
         return x
 
-#%%
-input_layer = tf.keras.Input(shape=(200,5))
-transformer1 = Transformer_block()(input_layer)
-transformer2 = Transformer_block()(transformer1)
-transformer3 = Transformer_block()(transformer2)
-transformer4 = Transformer_block()(transformer3)
-output_layer = Regression_block()(transformer4)
-#%%
+
+trainx = np.random.normal(1, 0.5, [100*200, 10])
+trainy = np.random.normal(1, 0.5, [100*200, 22])
+
+
+
+train = np.concatenate((trainx, trainy), axis=1)
+
+
+train_gen = TSGenerator(train)
+a = train_gen[0]
+
+input_layer = tf.keras.Input(shape=(6,20))
+transformer1 = Transformer_block(128,20)(input_layer)
+transformer2 = Transformer_block(128,20)(transformer1)
+transformer3 = Transformer_block(128,20)(transformer2)
+transformer4 = Transformer_block(128,20)(transformer3)
+output_layer = Regression_block()(transformer1)
 
 model = tf.keras.Model(input_layer, output_layer)
 model.summary()
 model.compile(optimizer='rmsprop', loss='mean_squared_error')
-#%%
-train_generator = TSGenerator(data, window_size = 200, batch_size = 32, step_size=20)
-model.fit(train_generator, epochs=10)
-#%%
-tdata = test[:,:5]
-tlabel = np.mean(test[:,-1])
 
-#%%
-model.predict(np.expand_dims(tdata, 0))
+history = model.fit(train_gen, epochs=1)
+
+
+
+
+
+
+
+
 
 
 
