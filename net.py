@@ -114,11 +114,11 @@ class MLP(tf.keras.layers.Layer):
         return x
        
 class Regression_block(tf.keras.layers.Layer):
-    def __init__(self, **kwargs):
+    def __init__(self, output_channels, **kwargs):
         super().__init__(**kwargs)
         self.mlp1 = MLP(128)
         self.mlp2 = MLP(128)
-        self.final = tf.keras.layers.Dense(1, activation='relu')
+        self.final = tf.keras.layers.Dense(output_channels, activation='relu')
         self.GAP = tf.keras.layers.GlobalAveragePooling1D()
     def call(self, x):
         x = self.GAP(x)
@@ -183,11 +183,11 @@ train_gen = TSGenerator(train)
 a = train_gen[0]
 
 input_layer = tf.keras.Input(shape=(6,20))
-transformer1 = Transformer_block(128,20)(input_layer)
+transformer1 = Transformer_block(attention_units=128,input_channels=20)(input_layer)
 transformer2 = Transformer_block(128,20)(transformer1)
 transformer3 = Transformer_block(128,20)(transformer2)
 transformer4 = Transformer_block(128,20)(transformer3)
-output_layer = Regression_block()(transformer1)
+output_layer = Regression_block(output_channels= 22)(transformer1)
 
 model = tf.keras.Model(input_layer, output_layer)
 model.summary()
