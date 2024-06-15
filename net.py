@@ -94,11 +94,7 @@ class TSGenerator(Sequence):
         tab = np.zeros([len(batch_indices),37,20])
         for d in range(0, tab.shape[0]):
             tab[d] = DWT(input_data[d], self.window_size)
-
-        tab2 = np.zeros([len(batch_indices), 6, 20])
-        for q in range(0, tab2.shape[0]):
-            tab2[q]= ExtractFeatures(tab[q], self.window_size, self.sampling_frequency)
-        return tab2, labels
+        return tab, labels
     
     def on_epoch_end(self):
         pass
@@ -170,30 +166,88 @@ class Transformer_block(tf.keras.layers.Layer):
         x = self.ff(x)
         return x
 
+class SplitFrequencyModel(tf.keras.Model):
+    def __init__(self, simpleLF = False, simpleHF = False):
+        super().__init__()
+        self.input_len = WaveletLength(200,4,28)
+        #indeksy kanałów z niska i wysoka czestotliwoscia
+        self.hf_indices = np.arange(0,10)
+        self.lf_indices = np.arange(10,20)
+        
+        if simpleHF:
+            self.hf_stack = tf.keras.Sequential([
+                tf.keras.layers.Dense(128, activation='relu'),
+                tf.keras.layers.Dense(64, activation='relu'),
+                tf.keras.layers.Dense(10, activation='relu')])
+        else:
+            self.hf_stack = tf.keras.Sequential([
+                tf.keras.Input(shape=(self.input_len,10)),
+                Transformer_block(128,10),
+                Transformer_block(128,10)
+                ])
+        
+        if simpleLF:
+            self.lf_stack = tf.keras.Sequential([
+                tf.keras.layers.Dense(128, activation='relu'),
+                tf.keras.layers.Dense(64, activation='relu'),
+                tf.keras.layers.Dense(10, activation='relu')])
+        else:
+            self.lf_stack = tf.keras.Sequential([
+                tf.keras.Input(shape=(self.input_len,10)),
+                Transformer_block(128,10),
+                Transformer_block(128,10)
+                ])
+            
+        self.concat = tf.keras.layers.Concatenate(axis=-1)
+        self.output_stack = tf.keras.Sequential([
+            tf.keras.layers.Dense(256, activation='relu'),
+            tf.keras.layers.Dropout(0.1),
+            tf.keras.layers.Dense(128, activation='relu')
+            ])
+        self.regression = Regression_block(22)
+        
+    def call(self, inputs):
+        hf_input = tf.gather(inputs, indices=self.hf_indices, axis=-1)
+        lf_input = tf.gather(inputs, indices=self.lf_indices, axis=-1)
+        
+        hf_output = self.hf_stack(hf_input)
+        lf_output = self.lf_stack(lf_input)
+        
+        x = self.concat([hf_output, lf_output])
+        x = self.output_stack(x)
+        x = self.regression(x)
+        
+        return x
+
 
 trainx = np.random.normal(1, 0.5, [100*200, 10])
 trainy = np.random.normal(1, 0.5, [100*200, 22])
-
-
-
 train = np.concatenate((trainx, trainy), axis=1)
 
 
 train_gen = TSGenerator(train)
 a = train_gen[0]
 
-input_layer = tf.keras.Input(shape=(6,20))
-transformer1 = Transformer_block(attention_units=128,input_channels=20)(input_layer)
-transformer2 = Transformer_block(128,20)(transformer1)
-transformer3 = Transformer_block(128,20)(transformer2)
-transformer4 = Transformer_block(128,20)(transformer3)
-output_layer = Regression_block(output_channels= 22)(transformer1)
 
-model = tf.keras.Model(input_layer, output_layer)
-model.summary()
+
+#SplitFrequencyModel usage example
+model = SplitFrequencyModel(simpleHF=False, simpleLF = False)
+model.build(input_shape=(None,WaveletLength(200,4,28),20))
 model.compile(optimizer='rmsprop', loss='mean_squared_error')
-
 history = model.fit(train_gen, epochs=1)
+
+# input_layer = tf.keras.Input(shape=(6,20))
+# transformer1 = Transformer_block(attention_units=128,input_channels=20)(input_layer)
+# transformer2 = Transformer_block(128,20)(transformer1)
+# transformer3 = Transformer_block(128,20)(transformer2)
+# transformer4 = Transformer_block(128,20)(transformer3)
+# output_layer = Regression_block(output_channels= 22)(transformer1)
+
+# model = tf.keras.Model(input_layer, output_layer)
+# model.summary()
+# model.compile(optimizer='rmsprop', loss='mean_squared_error')
+
+# history = model.fit(train_gen, epochs=1)
 
 
 
