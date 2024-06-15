@@ -171,8 +171,8 @@ class SplitFrequencyModel(tf.keras.Model):
         super().__init__()
         self.input_len = WaveletLength(200,4,28)
         #indeksy kanałów z niska i wysoka czestotliwoscia
-        self.hf_indices = np.arange(0,10)
-        self.lf_indices = np.arange(10,20)
+        self.hf_indices = np.arange(1,20,2)
+        self.lf_indices = np.arange(0,20,2)
         
         if simpleHF:
             self.hf_stack = tf.keras.Sequential([
