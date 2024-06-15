@@ -19,8 +19,14 @@ def WaveletLength(window_size, dwt_level, dec_len):
     return Wl
 
 def Standardize(data):
-    for i in range(0,data.shape[1]):
-        data[:,i] = (data[:,i] - np.mean(data[:,i]))/np.std(data[:,i])
+    if np.std(data) != 0:
+            data = (data - np.mean(data))/np.std(data)
+    else:
+            data = data - np.mean(data)
+    return data 
+
+def Normalize(data):
+    data = (data - np.min(data))/(np.max(data) - np.min(data))
     return data
 
 def DWT(data, window_size, dwt_level=4):
@@ -59,6 +65,14 @@ def ExtractFeatures(data, window_size, sampling_frequency, dwt_level=4):
         features[5,i] = np.sum(power_spectrum)/2
     return features
 
+ # Ensure each sample has 200 samples
+def pad_to_length(arr, target_length=200):
+    if arr.shape[0] < target_length:
+        padding = np.zeros((target_length - arr.shape[0], arr.shape[1]))
+        return np.vstack((arr, padding))
+    else:
+        return arr[:target_length, :]  # Trim if longer than 200
+
 #Filtering data 
 
 # Creating  3-rd order butterworth filter inside generator 
@@ -83,26 +97,114 @@ class TSGenerator(Sequence):
     
     def __getitem__(self, idx):
         batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
-        batch_data = np.array([self.data[i:i + self.window_size] for i in batch_indices])
+        batch_data = np.array([pad_to_length(self.data[i:i + self.window_size],target_length=self.window_size) for i in batch_indices])
         
         #Channels 
         input_data = np.array([sample[:, :10] for sample in batch_data])
         labels = np.array([np.mean(sample[:, 10:32], axis=0) for sample in batch_data])
-        labels = Standardize(labels)
+        for q in range(0, labels.shape[0]):
+            labels[q] = Standardize(np.array(labels[q]))
+            labels[q] = Normalize(labels[q])
 
-        input_data = filtfilt(self.b, self.a, input_data, axis=0)
-        tab = np.zeros([len(batch_indices),37,20])
-        for d in range(0, tab.shape[0]):
-            tab[d] = DWT(input_data[d], self.window_size)
+        padlen = 3* max(len(self.b),len(self.a)) - 1
 
-        tab2 = np.zeros([len(batch_indices), 6, 20])
-        for q in range(0, tab2.shape[0]):
-            tab2[q]= ExtractFeatures(tab[q], self.window_size, self.sampling_frequency)
-        return tab2, labels
+        if input_data.shape[1] > padlen:
+            tab1 = np.zeros([len(batch_indices), 200, 10])
+            tab2 = np.zeros([len(batch_indices),37,20])
+            tab3 = np.zeros([len(batch_indices), 6, 20])
+            for d in range(0, tab1.shape[0]):
+                tab1[d] = filtfilt(self.b, self.a, input_data[d], axis=0)
+                tab2[d] = DWT(tab1[d], self.window_size)
+                tab3[d] = ExtractFeatures(tab2[d], self.window_size, self.sampling_frequency)
+            return tab3, labels
+        else: 
+            print(f"Data was too trimmed. Len: {len(input_data)}, dim: {input_data[0]}")
+            return None, None
     
     def on_epoch_end(self):
         pass
+
+class TSGenerator_no_feature(Sequence):
+    def __init__(self, data, batch_size=32, window_size=200, sampling_frequency=2000, order=3, step_size=20):
+        self.data = data
+        self.sampling_frequency = sampling_frequency
+        nyq = 0.5 * self.sampling_frequency
+        self.b, self.a =  butter(order, [low/nyq, high/nyq], btype='band')
+        self.window_size = window_size
+        self.batch_size = batch_size
+        self.step_size = step_size
+        self.indices = np.arange(0, len(data) - window_size, step_size)
     
+    def __len__(self):
+        return int(np.ceil(len(self.indices) / self.batch_size))
+    
+    def __getitem__(self, idx):
+        batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
+        batch_data = np.array([pad_to_length(self.data[i:i + self.window_size],target_length=self.window_size) for i in batch_indices])
+        
+        #Channels 
+        input_data = np.array([sample[:, :10] for sample in batch_data])
+        labels = np.array([np.mean(sample[:, 10:32], axis=0) for sample in batch_data])
+        for q in range(0, labels.shape[0]):
+            labels[q] = Standardize(np.array(labels[q]))
+            labels[q] = Normalize(labels[q])
+
+        padlen = 3* max(len(self.b),len(self.a)) - 1
+
+        if input_data.shape[1] > padlen:
+            tab1 = np.zeros([len(batch_indices), 200, 10])
+            tab2 = np.zeros([len(batch_indices),37,20])
+            for d in range(0, tab1.shape[0]):
+                tab1[d] = filtfilt(self.b, self.a, input_data[d], axis=0)
+                tab2[d] = DWT(tab1[d], self.window_size)
+            return tab2, labels
+        else: 
+            print(f"Data was too trimmed. Len: {len(input_data)}, dim: {input_data[0]}")
+            return None, None
+    
+    def on_epoch_end(self):
+        pass
+
+class TSGenerator_no_DWT(Sequence):
+    def __init__(self, data, batch_size=32, window_size=200, sampling_frequency=2000, order=3, step_size=20):
+        self.data = data
+        self.sampling_frequency = sampling_frequency
+        nyq = 0.5 * self.sampling_frequency
+        self.b, self.a =  butter(order, [low/nyq, high/nyq], btype='band')
+        self.window_size = window_size
+        self.batch_size = batch_size
+        self.step_size = step_size
+        self.indices = np.arange(0, len(data) - window_size, step_size)
+    
+    def __len__(self):
+        return int(np.ceil(len(self.indices) / self.batch_size))
+    
+    def __getitem__(self, idx):
+        batch_indices = self.indices[idx * self.batch_size:(idx + 1) * self.batch_size]
+        batch_data = np.array([pad_to_length(self.data[i:i + self.window_size],target_length=self.window_size) for i in batch_indices])
+        
+        #Channels 
+        input_data = np.array([sample[:, :10] for sample in batch_data])
+        labels = np.array([np.mean(sample[:, 10:32], axis=0) for sample in batch_data])
+        for q in range(0, labels.shape[0]):
+            labels[q] = Standardize(np.array(labels[q]))
+            labels[q] = Normalize(labels[q])
+
+        padlen = 3* max(len(self.b),len(self.a)) - 1
+
+        if input_data.shape[1] > padlen:
+            tab1 = np.zeros([len(batch_indices), 200, 10])
+            tab2 = np.zeros([len(batch_indices),37,20])
+            tab3 = np.zeros([len(batch_indices), 6, 20])
+            for d in range(0, tab1.shape[0]):
+                tab1[d] = filtfilt(self.b, self.a, input_data[d], axis=0)
+            return tab1, labels
+        else: 
+            print(f"Data was too trimmed. Len: {len(input_data)}, dim: {input_data.shape[0]} {input_data.shape[1]} {input_data.shape[2]}")
+            return None, None
+    
+    def on_epoch_end(self):
+        pass
 class MLP(tf.keras.layers.Layer):
     def __init__(self, units, **kwargs):
         super().__init__(**kwargs)
@@ -169,33 +271,6 @@ class Transformer_block(tf.keras.layers.Layer):
         x = self.mha(x)
         x = self.ff(x)
         return x
-
-
-trainx = np.random.normal(1, 0.5, [100*200, 10])
-trainy = np.random.normal(1, 0.5, [100*200, 22])
-
-
-
-train = np.concatenate((trainx, trainy), axis=1)
-
-
-train_gen = TSGenerator(train)
-a = train_gen[0]
-
-input_layer = tf.keras.Input(shape=(6,20))
-transformer1 = Transformer_block(attention_units=128,input_channels=20)(input_layer)
-transformer2 = Transformer_block(128,20)(transformer1)
-transformer3 = Transformer_block(128,20)(transformer2)
-transformer4 = Transformer_block(128,20)(transformer3)
-output_layer = Regression_block(output_channels= 22)(transformer1)
-
-model = tf.keras.Model(input_layer, output_layer)
-model.summary()
-model.compile(optimizer='rmsprop', loss='mean_squared_error')
-
-history = model.fit(train_gen, epochs=1)
-
-
 
 
 
