@@ -166,6 +166,33 @@ class Transformer_block(tf.keras.layers.Layer):
         x = self.ff(x)
         return x
 
+class Transformer_Block_Encoding(tf.keras.layers.Layer):
+    def __init__(self, attention_units, input_channels, seq_len, **kwargs):
+        super().__init__(**kwargs)
+        self.mha = SelfAttention(attention_units)
+        self.ff = FeedForward(input_channels)
+        self.d_model = 1
+        self.positional_weigths = self.get_positional_encoding(max_len=seq_len, d_model=self.d_model)
+        self.add = tf.keras.layers.Add()
+        
+    def get_positional_encoding(self, max_len, d_model, **kwargs):
+
+        pos = np.arange(max_len).reshape(-1, 1)
+        i = np.arange(d_model).reshape(1, -1)
+        angle_rates = 1 / np.power(10000, (2 * i / np.float32(d_model)))
+        pos_encoding = pos / angle_rates
+
+        pos_encoding[:, 0::2] = np.sin(pos_encoding[:, 0::2])
+        pos_encoding[:, 1::2] = np.cos(pos_encoding[:, 1::2])
+
+        return pos_encoding
+    
+    def call(self, x):
+        x = self.add([x, self.positional_weigths])
+        x = self.mha(x)
+        x = self.ff(x)
+        return x
+
 class SplitFrequencyModel(tf.keras.Model):
     def __init__(self, simpleLF = False, simpleHF = False):
         super().__init__()
