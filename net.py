@@ -94,6 +94,10 @@ class TSGenerator(Sequence):
         tab = np.zeros([len(batch_indices),37,20])
         for d in range(0, tab.shape[0]):
             tab[d] = DWT(input_data[d], self.window_size)
+
+        tab2 = np.zeros([len(batch_indices), 6, 20])
+        for q in range(0, tab2.shape[0]):
+            tab2[q]= ExtractFeatures(tab[q], self.window_size, self.sampling_frequency)
         return tab, labels
     
     def on_epoch_end(self):
@@ -166,123 +170,153 @@ class Transformer_block(tf.keras.layers.Layer):
         x = self.ff(x)
         return x
 
-class Transformer_Block_Encoding(tf.keras.layers.Layer):
-    def __init__(self, attention_units, input_channels, seq_len, **kwargs):
+
+class Regression_block_embedded(tf.keras.layers.Layer):
+    def __init__(self, output_channels, **kwargs):
         super().__init__(**kwargs)
-        self.mha = SelfAttention(attention_units)
-        self.ff = FeedForward(input_channels)
-        self.d_model = 1
-        self.positional_weigths = self.get_positional_encoding(max_len=seq_len, d_model=self.d_model)
-        self.add = tf.keras.layers.Add()
-        
-    def get_positional_encoding(self, max_len, d_model, **kwargs):
-
-        pos = np.arange(max_len).reshape(-1, 1)
-        i = np.arange(d_model).reshape(1, -1)
-        angle_rates = 1 / np.power(10000, (2 * i / np.float32(d_model)))
-        pos_encoding = pos / angle_rates
-
-        pos_encoding[:, 0::2] = np.sin(pos_encoding[:, 0::2])
-        pos_encoding[:, 1::2] = np.cos(pos_encoding[:, 1::2])
-
-        return pos_encoding
-    
+        self.mlp1 = MLP(128)
+        self.mlp2 = MLP(128)
+        self.final = tf.keras.layers.Dense(output_channels, activation='relu')
+        self.GAP = tf.keras.layers.GlobalAveragePooling2D()
     def call(self, x):
-        x = self.add([x, self.positional_weigths])
-        x = self.mha(x)
-        x = self.ff(x)
+        x = self.GAP(x)
+        x = self.mlp1(x)
+        x = self.mlp2(x)
+        x = self.final(x)
         return x
 
-class SplitFrequencyModel(tf.keras.Model):
-    def __init__(self, simpleLF = False, simpleHF = False):
-        super().__init__()
-        self.input_len = WaveletLength(200,4,28)
-        #indeksy kanałów z niska i wysoka czestotliwoscia
-        self.hf_indices = np.arange(1,20,2)
-        self.lf_indices = np.arange(0,20,2)
-        
-        if simpleHF:
-            self.hf_stack = tf.keras.Sequential([
-                tf.keras.layers.Dense(128, activation='relu'),
-                tf.keras.layers.Dense(64, activation='relu'),
-                tf.keras.layers.Dense(10, activation='relu')])
-        else:
-            self.hf_stack = tf.keras.Sequential([
-                tf.keras.Input(shape=(self.input_len,10)),
-                Transformer_block(128,10),
-                Transformer_block(128,10)
-                ])
-        
-        if simpleLF:
-            self.lf_stack = tf.keras.Sequential([
-                tf.keras.layers.Dense(128, activation='relu'),
-                tf.keras.layers.Dense(64, activation='relu'),
-                tf.keras.layers.Dense(10, activation='relu')])
-        else:
-            self.lf_stack = tf.keras.Sequential([
-                tf.keras.Input(shape=(self.input_len,10)),
-                Transformer_block(128,10),
-                Transformer_block(128,10)
-                ])
-            
-        self.concat = tf.keras.layers.Concatenate(axis=-1)
-        self.output_stack = tf.keras.Sequential([
-            tf.keras.layers.Dense(256, activation='relu'),
-            tf.keras.layers.Dropout(0.1),
-            tf.keras.layers.Dense(128, activation='relu')
-            ])
-        self.regression = Regression_block(22)
-        
+class Input_Embedding(tf.keras.layers.Layer):
+    def __init__(self, seq_len=37, embedding_dim=120, channels=20):
+        super(Input_Embedding, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.channels = channels
+        self.conv = tf.keras.layers.Conv1D(embedding_dim * channels, 1, groups=channels)  # Each channel embedded separately
+
     def call(self, inputs):
+        x = self.conv(inputs)
+        x = tf.reshape(x, (-1, tf.shape(x)[1], self.channels, self.embedding_dim))
+        
+        return x
+    
+class Trig_Encoding(tf.keras.layers.Layer):
+    def __init__(self, seq_len = 37, d_model = 120, channels = 20):
+        super().__init__()
+        self.seq_len = seq_len
+        self.d_model = d_model
+        self.pos_encoding = self.add_weight(
+            "pos_encoding",
+            shape=[seq_len, channels , d_model],
+            initializer="zeros",
+            trainable=False
+        )
+
+    def call(self, inputs):
+        return inputs + self.pos_encoding[:, :tf.shape(inputs)[1], :]
+    
+def positional_encoding(seq_len, d_model, channels):
+    angle_rads = np.arange(seq_len)[:, np.newaxis] / np.power(10000, (2 * (np.arange(d_model)[np.newaxis, :] // 2)) / np.float32(d_model))
+    
+    angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
+    angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+    
+    pos_encoding = angle_rads[np.newaxis, ...]
+    pos_encoding = tf.tile(tf.expand_dims(pos_encoding, axis=2), [1, 1, channels, 1])
+    return tf.cast(pos_encoding, dtype=tf.float32)
+
+
+class Trainable_Encoding(tf.keras.layers.Layer):
+    def __init__(self, seq_len = 37, d_model = 120, channels = 20):
+        super(Trainable_Encoding, self).__init__()
+        self.seq_len = seq_len
+        self.d_model = d_model
+        self.pos_encoding = self.add_weight(
+            "pos_encoding",
+            shape=[seq_len, channels , d_model],
+            initializer=tf.initializers.RandomNormal(),
+            trainable=True
+        )
+
+    def call(self, inputs):
+        return inputs + self.pos_encoding[:, :tf.shape(inputs)[1], :]
+
+class Embedding_Layer(tf.keras.layers.Layer):
+    def __init__(self, input_len, embedding_dim, num_channels, TrainEncoding = False,**kwargs):
+        super().__init__(**kwargs)
+
+        self.input_embedding = Input_Embedding(input_len,embedding_dim,num_channels)
+        if TrainEncoding:
+            self.positional_encoding = Trainable_Encoding(input_len,embedding_dim,num_channels)
+        else:
+            self.positional_encoding = Trig_Encoding(input_len, embedding_dim,num_channels)
+    def call(self, inputs):
+        x = self.input_embedding(inputs)
+        x = self.positional_encoding(x)
+        return x
+    
+    
+class split_input(tf.keras.layers.Layer):
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        self.hf_indices = np.arange(0,20,2)
+        self.lf_indices = np.arange(1,20,2)
+    def call(self,inputs):
         hf_input = tf.gather(inputs, indices=self.hf_indices, axis=-1)
         lf_input = tf.gather(inputs, indices=self.lf_indices, axis=-1)
-        
-        hf_output = self.hf_stack(hf_input)
-        lf_output = self.lf_stack(lf_input)
-        
-        x = self.concat([hf_output, lf_output])
-        x = self.output_stack(x)
-        x = self.regression(x)
-        
-        return x
+        return(hf_input, lf_input)
 
+
+#%%
 
 trainx = np.random.normal(1, 0.5, [100*200, 10])
 trainy = np.random.normal(1, 0.5, [100*200, 22])
+
+
+
 train = np.concatenate((trainx, trainy), axis=1)
-
-
 train_gen = TSGenerator(train)
 a = train_gen[0]
 
+lfembedding = Embedding_Layer(37,10,10,False)
+hfembedding = Embedding_Layer(37,10,10,False)
 
+lfembedding.set_weights(positional_encoding(37,10,10))
+hfembedding.set_weights(positional_encoding(37,10,10))
 
-#SplitFrequencyModel usage example
-model = SplitFrequencyModel(simpleHF=False, simpleLF = False)
-model.build(input_shape=(None,WaveletLength(200,4,28),20))
+input_layer = tf.keras.Input(shape=(37,20))
+hf, lf = split_input()(input_layer)
+
+hfemb = hfembedding(hf)
+lfemb = lfembedding(lf)
+
+hft1 = Transformer_block(attention_units=128,input_channels=10)(hfemb)
+hft2 = Transformer_block(attention_units=128,input_channels=10)(hft1)
+
+lft1 = Transformer_block(attention_units=128,input_channels=10)(lfemb)
+lft2 = Transformer_block(attention_units=128,input_channels=10)(lft1)
+
+concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
+x = tf.keras.layers.Dense(256, activation='relu')(concat)
+x = tf.keras.layers.Dropout(0.1)(x)
+x = tf.keras.layers.Dense(128, activation='relu')(x)
+output_layer = Regression_block_embedded(output_channels= 22)(x)
+
+model = tf.keras.Model(input_layer, output_layer)
+
 model.compile(optimizer='rmsprop', loss='mean_squared_error')
-history = model.fit(train_gen, epochs=1)
+model.summary()
+model.fit(train_gen,epochs=1)
 
-# input_layer = tf.keras.Input(shape=(6,20))
-# transformer1 = Transformer_block(attention_units=128,input_channels=20)(input_layer)
-# transformer2 = Transformer_block(128,20)(transformer1)
-# transformer3 = Transformer_block(128,20)(transformer2)
-# transformer4 = Transformer_block(128,20)(transformer3)
-# output_layer = Regression_block(output_channels= 22)(transformer1)
+#%%
+emb = Embedding_Layer(37, 10, 20, False)
+emb.set_weights(positional_encoding(37,10,20))
 
-# model = tf.keras.Model(input_layer, output_layer)
-# model.summary()
-# model.compile(optimizer='rmsprop', loss='mean_squared_error')
+input_layer = tf.keras.Input(shape=(37,20))
+embedded = emb(input_layer)
+transformer1 = Transformer_block(attention_units=128,input_channels=10)(embedded)
+transformer2 = Transformer_block(attention_units=128,input_channels=10)(transformer1)
+output_layer = Regression_block_embedded(output_channels= 22)(transformer2)
 
-# history = model.fit(train_gen, epochs=1)
-
-
-
-
-
-
-
-
-
-
-
+model = tf.keras.Model(input_layer, output_layer)
+model.summary()
+model.compile(optimizer='rmsprop', loss='mean_squared_error')
+model.fit(train_gen,epochs=1)
