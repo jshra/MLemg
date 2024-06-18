@@ -373,8 +373,9 @@ class Transformer_block_v2(tf.keras.layers.Layer):
 # lft1 = Transformer_block_v2(attention_units=128,input_channels=10)(lfemb)
 # lft2 = Transformer_block_v2(attention_units=128,input_channels=10)(lft1)
 # 
-# concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
-# output_layer = Regression_block_embedded_smaller(output_channels= 22)(concat)
+#concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
+#regression_input = Transformer_block_v2(attention_units=128,input_channels=20)(concat)
+#output_layer = Regression_block_embedded_smaller(output_channels= 22)(regression_input)
 # 
 # model = tf.keras.Model(input_layer, output_layer)
 # 
@@ -403,8 +404,9 @@ class Transformer_block_v2(tf.keras.layers.Layer):
 # lft1 = Transformer_block_v2(attention_units=128,input_channels=10)(lfemb)
 # lft2 = Transformer_block_v2(attention_units=128,input_channels=10)(lft1)
 # 
-# concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
-# output_layer = Regression_block_embedded_noGAP(output_channels= 22)(concat)
+#concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
+#regression_input = Transformer_block_v2(attention_units=128,input_channels=20)(concat)
+#output_layer = Regression_block_embedded_noGAP(output_channels= 22)(regression_input)
 # 
 # model = tf.keras.Model(input_layer, output_layer)
 # 
