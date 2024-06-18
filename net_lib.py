@@ -282,6 +282,64 @@ class split_input(tf.keras.layers.Layer):
         return(hf_input, lf_input)
 
 
+class Regression_block_embedded_noGAP(tf.keras.layers.Layer):
+    def __init__(self, output_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.mlp1 = MLP(128)
+        self.mlp2 = MLP(64)
+        self.final = tf.keras.layers.Dense(output_channels, activation='relu')
+        self.flatten = tf.keras.layers.Flatten()
+    def call(self, x):
+        x = self.flatten(x)
+        x = self.mlp1(x)
+        x = self.mlp2(x)
+        x = self.final(x)
+        return x
+        
+class Regression_block_embedded_smaller(tf.keras.layers.Layer):
+    def __init__(self, output_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.mlp = MLP(128)
+        self.final = tf.keras.layers.Dense(output_channels, activation='relu')
+        self.GAP = tf.keras.layers.GlobalAveragePooling2D()
+    def call(self, x):
+        x = self.GAP(x)
+        x = self.mlp(x)
+        x = self.final(x)
+        return x
+
+class FeedForwardLarger(tf.keras.layers.Layer):
+    def __init__(self, input_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.layernorm = tf.keras.layers.LayerNormalization()
+        self.conv1 = tf.keras.layers.Conv1D(filters=input_channels*2, kernel_size=1, activation='relu')
+        self.dropout = tf.keras.layers.Dropout(0.1)
+        self.conv2 = tf.keras.layers.Conv1D(filters=input_channels, kernel_size=1)
+        self.add = tf.keras.layers.Add()
+
+    def call(self, x):
+        out = self.layernorm(x)
+        out = self.conv1(out)
+        out = self.dropout(out)
+        out = self.conv2(out)
+        x = self.add([x, out])
+        return x
+
+class Transformer_block_v2(tf.keras.layers.Layer):
+    def __init__(self, attention_units, input_channels, **kwargs):
+        super().__init__(**kwargs)
+        self.mha = SelfAttention(attention_units)
+        self.ff = FeedForwardLarger(input_channels)
+
+    def call(self, x):
+        x = self.mha(x)
+        x = self.ff(x)
+        return x
+
+
+
+
+
 #%%
 ''' Example usage of particular layers cointained inside library .py file '''
 # trainx = np.random.normal(1, 0.5, [100*200, 10])
@@ -293,47 +351,64 @@ class split_input(tf.keras.layers.Layer):
 # train_gen = TSGenerator(train)
 # a = train_gen[0]
 
+
+
+# =============================================================================
+# #split_smaller
 # lfembedding = Embedding_Layer(37,10,10,False)
 # hfembedding = Embedding_Layer(37,10,10,False)
-
+# 
 # lfembedding.set_weights(positional_encoding(37,10,10))
 # hfembedding.set_weights(positional_encoding(37,10,10))
-
+# 
 # input_layer = tf.keras.Input(shape=(37,20))
 # hf, lf = split_input()(input_layer)
-
+# 
 # hfemb = hfembedding(hf)
 # lfemb = lfembedding(lf)
-
-# hft1 = Transformer_block(attention_units=128,input_channels=10)(hfemb)
-# hft2 = Transformer_block(attention_units=128,input_channels=10)(hft1)
-
-# lft1 = Transformer_block(attention_units=128,input_channels=10)(lfemb)
-# lft2 = Transformer_block(attention_units=128,input_channels=10)(lft1)
-
+# 
+# hft1 = Transformer_block_v2(attention_units=128,input_channels=10)(hfemb)
+# hft2 = Transformer_block_v2(attention_units=128,input_channels=10)(hft1)
+# 
+# lft1 = Transformer_block_v2(attention_units=128,input_channels=10)(lfemb)
+# lft2 = Transformer_block_v2(attention_units=128,input_channels=10)(lft1)
+# 
 # concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
-# x = tf.keras.layers.Dense(256, activation='relu')(concat)
-# x = tf.keras.layers.Dropout(0.1)(x)
-# x = tf.keras.layers.Dense(128, activation='relu')(x)
-# output_layer = Regression_block_embedded(output_channels= 22)(x)
-
+# output_layer = Regression_block_embedded_smaller(output_channels= 22)(concat)
+# 
 # model = tf.keras.Model(input_layer, output_layer)
-
+# 
 # model.compile(optimizer='rmsprop', loss='mean_squared_error')
 # model.summary()
-# model.fit(train_gen,epochs=1)
+# 
+# =============================================================================
 
-#%%
-# emb = Embedding_Layer(37, 10, 20, False)
-# emb.set_weights(positional_encoding(37,10,20))
-
+# =============================================================================
+# #split_noGAP
+# lfembedding = Embedding_Layer(37,10,10,False)
+# hfembedding = Embedding_Layer(37,10,10,False)
+# 
+# lfembedding.set_weights(positional_encoding(37,10,10))
+# hfembedding.set_weights(positional_encoding(37,10,10))
+# 
 # input_layer = tf.keras.Input(shape=(37,20))
-# embedded = emb(input_layer)
-# transformer1 = Transformer_block(attention_units=128,input_channels=10)(embedded)
-# transformer2 = Transformer_block(attention_units=128,input_channels=10)(transformer1)
-# output_layer = Regression_block_embedded(output_channels= 22)(transformer2)
-
+# hf, lf = split_input()(input_layer)
+# 
+# hfemb = hfembedding(hf)
+# lfemb = lfembedding(lf)
+# 
+# hft1 = Transformer_block_v2(attention_units=128,input_channels=10)(hfemb)
+# hft2 = Transformer_block_v2(attention_units=128,input_channels=10)(hft1)
+# 
+# lft1 = Transformer_block_v2(attention_units=128,input_channels=10)(lfemb)
+# lft2 = Transformer_block_v2(attention_units=128,input_channels=10)(lft1)
+# 
+# concat = tf.keras.layers.Concatenate(axis=-1)([hft2,lft2])
+# output_layer = Regression_block_embedded_noGAP(output_channels= 22)(concat)
+# 
 # model = tf.keras.Model(input_layer, output_layer)
-# model.summary()
+# 
 # model.compile(optimizer='rmsprop', loss='mean_squared_error')
-# model.fit(train_gen,epochs=1)
+# model.summary()
+# 
+# =============================================================================
